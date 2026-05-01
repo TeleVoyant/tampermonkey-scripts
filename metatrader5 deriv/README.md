@@ -131,26 +131,47 @@ Each order row (`data-id`) has its alert timestamp stored in the `lastAlerted` m
 
 ## Adaptive Threshold Logic
 
-A fixed threshold (e.g. "flag if diff < 50 points") would be meaningless across the wide range of instruments on Deriv — prices range from ~1.87 (GBPAUD) to ~134,000 (Jump 25 Index).
+A single flat percentage fails across Deriv's instruments because price scales differ by five orders of magnitude — GBPAUD trades at ~1.87 while Jump 25 Index trades at ~134,000. A 2% threshold on GBPAUD would be hundreds of pips (far too wide), while 2% on Boom 50 at 104,000 is still 2,080 points (too coarse for a fast-moving index).
 
-Instead, both thresholds are calculated as a **percentage of the order's own Open Price**:
+The script uses a **tiered system**: the open price magnitude selects a tier, and each tier has its own yellow and red fractions calibrated to that instrument class.
+
+### Tier Table
+
+| Price range      | Instrument class                          | Yellow fraction | Red fraction |
+| ---------------- | ----------------------------------------- | --------------- | ------------ |
+| < 10             | Forex pairs (GBPAUD, EURUSD…)             | 0.3%            | 0.05%        |
+| 10 – 500         | Small indices (Vol 50, Vol 100)           | 1.5%            | 0.3%         |
+| 500 – 5,000      | Mid indices (Vol 100(1s), Vol 75(1s))     | 1.0%            | 0.2%         |
+| 5,000 – 30,000   | Large volatility (Vol 90(1s), Vol 10(1s)) | 0.8%            | 0.15%        |
+| 30,000 – 60,000  | Jump/Crash mid (Vol 75, Jump 50)          | 0.6%            | 0.1%         |
+| 60,000 – 110,000 | Large Jump/Boom (Jump 10, Boom 50)        | 0.4%            | 0.08%        |
+| > 110,000        | Very large indices (Jump 25 and above)    | 0.3%            | 0.06%        |
+
+### Formula
 
 ```
-yellowThresh = max(|openPrice| × 0.02,  1e-9)   → 2%  of open price
-redThresh    = max(|openPrice| × 0.005, 1e-9)   → 0.5% of open price
+tier         = first tier where |openPrice| < tier.maxPrice
+yellowThresh = max(|openPrice| × tier.yellowFrac, 1e-9)
+redThresh    = max(|openPrice| × tier.redFrac,    1e-9)
 ```
 
-**Examples:**
+### Worked examples
 
 | Symbol              | Open Price | Yellow threshold | Red threshold |
 | ------------------- | ---------- | ---------------- | ------------- |
-| GBPAUD              | 1.87000    | 0.03740          | 0.00935       |
-| Volatility 50 Index | 98.51      | 1.9703           | 0.4926        |
-| Volatility 10 (1s)  | 10,251     | 205.03           | 51.26         |
-| Jump 10 Index       | 97,176     | 1,943.5          | 485.9         |
-| Boom 50 Index       | 104,404    | 2,088.1          | 522.0         |
+| GBPAUD              | 1.87000    | 0.005610         | 0.000935      |
+| Volatility 50 Index | 98.51      | 1.4777           | 0.2955        |
+| Vol 100 (1s) Index  | 1,298.68   | 12.987           | 2.597         |
+| Volatility 75 (1s)  | 4,500.00   | 45.000           | 9.000         |
+| Vol 90 (1s) Index   | 10,251.59  | 82.013           | 15.377        |
+| Crash 900 Index     | 19,801.06  | 158.408          | 29.701        |
+| Volatility 75 Index | 36,415.31  | 218.492          | 36.415        |
+| Jump 50 Index       | 44,900.00  | 269.400          | 44.900        |
+| Jump 10 Index       | 97,176.73  | 388.707          | 77.741        |
+| Boom 50 Index       | 104,404.98 | 417.620          | 83.524        |
+| Jump 25 Index       | 134,371.98 | 403.116          | 80.623        |
 
-The `1e-9` floor prevents division/comparison issues on theoretical zero-price instruments.
+The `1e-9` floor prevents any comparison issues on theoretical zero-price instruments.
 
 ---
 
@@ -187,16 +208,15 @@ This is why earlier versions of the script (which set `background` on `.tr` via 
 
 All tunable values are constants at the top of the script:
 
-| Constant            | Default                | Description                                        |
-| ------------------- | ---------------------- | -------------------------------------------------- |
-| `INTERVAL_MS`       | `5000`                 | Scan frequency in milliseconds                     |
-| `YELLOW_FRACTION`   | `0.01`                 | Yellow threshold as fraction of open price (1%)    |
-| `RED_FRACTION`      | `0.001`                | Red threshold as fraction of open price (0.1%)     |
-| `YELLOW_BG`         | `rgba(255,200,0,0.35)` | Yellow highlight colour                            |
-| `RED_BG`            | `rgba(220,60,60,0.40)` | Red highlight colour                               |
-| `ALERT_COOLDOWN_MS` | `180000`               | Minimum ms between alerts for the same row (180 s) |
+| Constant            | Default                | Description                                                  |
+| ------------------- | ---------------------- | ------------------------------------------------------------ |
+| `INTERVAL_MS`       | `5000`                 | Scan frequency in milliseconds                               |
+| `YELLOW_BG`         | `rgba(255,200,0,0.35)` | Yellow highlight colour                                      |
+| `RED_BG`            | `rgba(220,60,60,0.40)` | Red highlight colour                                         |
+| `ALERT_COOLDOWN_MS` | `180000`               | Minimum ms between alerts for the same row (180 s)           |
+| `THRESHOLD_TIERS`   | (array)                | Tiered fraction table — see Adaptive Threshold Logic section |
 
-To make the yellow zone wider, increase `YELLOW_FRACTION`. To make the red alert trigger sooner, increase `RED_FRACTION` (e.g. `0.01` for 1%).
+To adjust sensitivity for a specific instrument class, find its tier in `THRESHOLD_TIERS` and modify `yellowFrac` and/or `redFrac`. For example, to widen the watch zone for Forex pairs change the first tier's `yellowFrac` from `0.003` to `0.005`.
 
 ---
 
